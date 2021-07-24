@@ -1,7 +1,23 @@
 //Messaging API Channel access token @ FACE API
-var access_token = "LINE MESSAGING API TOKEN";
-var google_drive_id = "Google Drive ID";
-var faceApiKey = 'Computor vision api key';
+var access_token = PropertiesService.getScriptProperties().getProperty('ACCESS_TOKEN');
+var google_drive_id = PropertiesService.getScriptProperties().getProperty('GOOGLE_DRIVE_ID');
+var faceApiKey = PropertiesService.getScriptProperties().getProperty('FACE_API_KEY');
+
+function test() {
+  //Driveから保存したファイルをFileName指定でファイルを取得する
+  var myFolder = DriveApp.getFolderById(google_drive_id);
+  var getImage = myFolder.getFilesByName("face.jpg").next();
+  
+  //画像ファイルにリンクでアクセスできるように権限付与
+  getImage.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  
+  //画像ファイル取得及びbase64形式にエンコード
+  var realImageURL = 'https://drive.google.com/uc?export=view&id=' + getImage.getId();
+  
+  //画像ファイルをVision APIで解析する
+  var answerMessage = executeFace(realImageURL);
+  Logger.log(answerMessage);
+}
 
 // ボットにメッセージ送信/フォロー/アンフォローした時の処理
 function doPost(e) {
@@ -21,42 +37,73 @@ function reply(e) {
   var replyToken = e.replyToken;
   if(e.message.type=="image"){
   } else {
-    replyMessage(replyToken, "節子、、、これ画像ちゃう！ハジキや！！(違う)");
+    replyMessage(replyToken, "これは画像ではありません");
     return;
   }
   
   try {
     //LINE上から画像のバイナリーデータを取得
-    var contentsEndPoint = 'https://api.line.me/v2/bot/message/' + e.message.id + '/content';
-    var image_get_option = {
-      "method":"get",
-      "headers": {
-        "Content-Type" : "application/json",
-        "Authorization" : "Bearer " + access_token      
-      }
-    }
-    var imageBinary = UrlFetchApp.fetch(contentsEndPoint,image_get_option);
+    var imageBinary = getImageBinary(e);
     
-    //取得したバイナリーデータを一時的にGoogleDriveに保存
-    var myFolder = DriveApp.getFolderById(google_drive_id);
-    var fileName = Math.random().toString(36).slice(-8);
-    var getImage = myFolder.createFile(imageBinary.getBlob().setName(fileName));
+    //Face APIで解析可能な形に変換
+    var imageInfo = encodeImage(imageBinary);
     
-    //画像ファイルにリンクでアクセスできるように権限付与
-    getImage.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    //Face APIで顔認識
+    var faceInformation = executeFace(imageInfo.imageURL);
     
-    //画像ファイル取得及びbase64形式にエンコード
-    var faceImageURL = 'https://drive.google.com/uc?export=view&id=' + getImage.getId();
-    var reply = executeFace(faceImageURL);
-    replyMessage(replyToken,reply);
+    //結果を返す
+    replyMessage(replyToken, faceInformation);
     
     //画像解析が完了したら一時保存した画像ファイルを削除
-    myFolder.removeFile(getImage);
+    removeFile(imageInfo);
   } catch(error) {
-    replyMessage(replyToken, "、、下手を打ったようだ、、、やり直してくれ、、、");
+    replyMessage(replyToken, "エラーが発生しました、、やり直してください");
     Logger.log("Error");
     Logger.log(error);
   }
+}
+
+//一時保存した画像ファイルを削除
+function removeFile(imageInfo) {
+  var folder = imageInfo.folder;
+  var file = imageInfo.file;
+  folder.removeFile(file);
+}
+
+//画像データをCloudVisionで使えるようにDriveを利用して加工する
+function encodeImage(imageBinary){
+  //取得したバイナリーデータを一時的にGoogleDriveに保存
+  var folder = DriveApp.getFolderById(google_drive_id);
+  var fileName = Math.random().toString(36).slice(-8);
+  var imageFile = folder.createFile(imageBinary.getBlob().setName(fileName));
+  
+  //画像ファイルにリンクでアクセスできるように権限付与
+  imageFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  
+  //画像ファイルのURLを取得
+  var imageURL = 'https://drive.google.com/uc?export=view&id=' + imageFile.getId();
+
+  //処理後にファイルを削除するため必要な情報をまとめる
+  var imageInfo = {
+    folder:folder,
+    file:imageFile,
+    imageURL:imageURL
+  }
+  return imageInfo;
+}
+
+//LINEから画像データをバイナリー形式で取得
+function getImageBinary(e) {
+  var contentsEndPoint = 'https://api.line.me/v2/bot/message/' + e.message.id + '/content';
+  var image_get_option = {
+    "method":"get",
+    "headers": {
+      "Content-Type" : "application/json",
+      "Authorization" : "Bearer " + access_token      
+    }
+  }
+  var imageBinary = UrlFetchApp.fetch(contentsEndPoint,image_get_option);
+  return imageBinary;
 }
 
 //ユーザーにメッセージを返信します。
@@ -82,8 +129,8 @@ function replyMessage(replyToken, message) {
 }
 
 function executeFace(faceImageURL) {
-  //Microsoft Face API
-  var faceUrl = 'https://westcentralus.api.cognitive.microsoft.com/face/v1.0/detect';
+  //Microsoft Azure Face API
+  var faceUrl = 'https://japaneast.api.cognitive.microsoft.com/face/v1.0/detect?returnFaceId=true&returnFaceLandmarks=false';
   
   //FACE APIでチェックする指標を指定する
   var params = '?returnFaceId=true&returnFaceLandmarks=false&returnFaceAttributes=age,gender,smile,glasses,emotion,hair,accessories,exposure';
@@ -105,14 +152,16 @@ function executeFace(faceImageURL) {
   };
   var response = UrlFetchApp.fetch(faceUrl + params, head);
   var parsedResponse = JSON.parse(response);
+  Logger.log(parsedResponse);
   if (parsedResponse[0]) {
     var faceAttributes = parsedResponse[0].faceAttributes;
-    var faceInfo = '\n';
+    var faceInfo = 'この顔は、、、\n';
     faceInfo += '性別：' + (faceAttributes.gender == 'male' ? '男' : '女') + '\n';
     faceInfo += '年齢：' + faceAttributes.age + '歳\n';
+    faceInfo += '笑顔：' + Math.round(faceAttributes.smile * 100) + '%\n';
     faceInfo += 'メガネ：' + (faceAttributes.glasses == 'NoGlasses' ? 'してない' : 'してる') + '\n';
     faceInfo += '感情：' + checkEmotion(faceAttributes.emotion) + '\n';
-    faceInfo += 'ハゲ度：' + checkBald(faceAttributes.hair.bald) + '\n';
+    faceInfo += 'ハゲ度：' + checkBald(faceAttributes.hair.bald);
     return faceInfo;
   } else {
     return "顔が見当たりません。。";
@@ -123,9 +172,9 @@ function executeFace(faceImageURL) {
 function checkBald(bald) {
   if (bald <= 0.3) {
     return 'ハゲてないよ';
-  } else if (bald > 0.3 && bald <= 0.7) {
+  } else if (bald > 0.3 && bald <= 0.6) {
     return 'まだ大丈夫だよ';
-  } else if (bald > 0.7 && bald < 1) {
+  } else if (bald > 0.6 && bald < 0.9) {
     return 'ハゲかけ';
   }
   return 'ハゲてる';

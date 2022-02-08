@@ -94,7 +94,7 @@ function encodeImage(imageBinary){
 
 //LINEから画像データをバイナリー形式で取得
 function getImageBinary(e) {
-  var contentsEndPoint = 'https://api.line.me/v2/bot/message/' + e.message.id + '/content';
+  var contentsEndPoint = 'https://api-data.line.me/v2/bot/message/' + e.message.id + '/content';
   var image_get_option = {
     "method":"get",
     "headers": {
